@@ -1,10 +1,11 @@
 const express = require('express');
 const WebSocket = require('ws');
-const { spawn } = require('child_process');
 const puppeteer = require('puppeteer-core');
 
 const app = express();
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 3333; // Use port 3333
+
+console.log("starting")
 
 // Serve the viewer page
 app.get('/', (req, res) => {
@@ -15,22 +16,17 @@ app.get('/', (req, res) => {
         <title>Chromium Stream</title>
         <style>
           body { margin: 0; }
-          video { width: 100vw; height: 100vh; }
+          img { width: 100vw; height: 100vh; object-fit: cover; }
         </style>
       </head>
       <body>
-        <video id="video" autoplay playsinline></video>
+        <img id="stream" />
         <script>
           const ws = new WebSocket('ws://' + window.location.host);
-          const video = document.getElementById('video');
-          
-          ws.onmessage = async (event) => {
-            const blob = new Blob([event.data], { type: 'video/webm' });
-            try {
-              video.srcObject = await blob.stream();
-            } catch (e) {
-              console.error('Error setting video source:', e);
-            }
+          const streamImage = document.getElementById('stream');
+
+          ws.onmessage = (event) => {
+            streamImage.src = URL.createObjectURL(event.data);
           };
         </script>
       </body>
@@ -41,40 +37,63 @@ app.get('/', (req, res) => {
 // Start WebSocket server
 const wss = new WebSocket.Server({ server: app.listen(port) });
 
-// Handle WebSocket connections
+// Handle WebSocket connections and streaming
 wss.on('connection', (ws) => {
   console.log('Client connected');
-  ws.on('close', () => console.log('Client disconnected'));
+
+  let page; // Keep track of the page for this connection
+
+  const startStreaming = async (url) => {
+    try {
+      const browser = await puppeteer.launch({
+        executablePath: '/usr/bin/chromium-browser',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--start-maximized'
+        ],
+      });
+
+      page = await browser.newPage();
+      await page.goto(url, { waitUntil: 'networkidle0' });
+
+      // Send screenshots periodically
+      setInterval(async () => {
+        try {
+          const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(screenshot);
+          }
+        } catch (screenshotError) {
+          console.error('Error taking screenshot:', screenshotError);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send('Error taking screenshot');
+          }
+        }
+      }, 100); // Adjust interval as needed
+
+    } catch (error) {
+      console.error('Error launching browser or navigating:', error);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send('Error launching browser or navigating');
+      }
+    }
+  };
+
+  ws.on('message', (message) => {
+    // Expect a message to contain the URL to navigate
+    console.log("Received URL:", message)
+    startStreaming(message.toString());
+  });
+
+  ws.on('close', () => {
+    console.log('Client disconnected');
+    if (page) {
+      page.close().catch(error => console.error("Error closing page:", error));
+    }
+  });
+
+  startStreaming("https://example.com")
 });
-
-// Start Chromium with Puppeteer
-async function startChromium(url) {
-  const browser = await puppeteer.launch({
-    executablePath: '/usr/bin/chromium-browser',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--start-maximized'
-    ]
-  });
-
-  const page = await browser.newPage();
-  await page.goto(url);
-
-  // Start streaming
-  const stream = await page.evaluate(() => {
-    return navigator.mediaDevices.getDisplayMedia({
-      video: { cursor: "always" }
-    });
-  });
-
-  // Handle the stream (implementation depends on your needs)
-  // You might want to use WebRTC, or stream directly to clients
-}
-
-// Start Chromium with the provided URL
-if (process.argv[2]) {
-  startChromium(process.argv[2]);
-}
