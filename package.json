@@ -1,0 +1,9 @@
+{
+  "name": "chromium-stream",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.17.1",
+    "puppeteer-core": "^21.0.0",
+    "ws": "^8.2.3"
+  }
+}
